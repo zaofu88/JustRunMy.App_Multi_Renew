@@ -24,9 +24,9 @@ jobs:
           pip install seleniumbase requests
           seleniumbase install chromedriver
 
-      - name: 🚀 运行脚本
+      - name: 🚀 运行续期脚本
         env:
-          # 严格映射你指定的 6 个变量
+          # 对接你指定的 Secrets 名
           EML_1: ${{ secrets.EML_1 }}
           PWD_1: ${{ secrets.PWD_1 }}
           EML_2: ${{ secrets.EML_2 }}
@@ -36,3 +36,10 @@ jobs:
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
             python reset_timer.py
+
+      - name: 📸 上传调试截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: "*.png"
