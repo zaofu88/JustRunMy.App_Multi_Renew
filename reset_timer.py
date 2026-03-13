@@ -14,14 +14,14 @@ DOMAIN    = "justrunmy.app"
 # ============================================================
 #  环境变量与全局变量
 # ============================================================
-EMAIL        = os.environ.get("JUSTRUNMY_EMAIL")
-PASSWORD     = os.environ.get("JUSTRUNMY_PASSWORD")
+EMAIL        = os.environ.get("ACC")
+PASSWORD     = os.environ.get("ACC_PWD")
 TG_BOT_TOKEN = os.environ.get("TG_TOKEN")
 TG_CHAT_ID   = os.environ.get("TG_ID")
 
 if not EMAIL or not PASSWORD:
-    print("致命错误：未找到 JUSTRUNMY_EMAIL 或 JUSTRUNMY_PASSWORD 环境变量！")
-    print("请检查 GitHub Repository Secrets 是否配置正确。")
+    print("致命错误：未找到 ACC 或 ACC_PWD 环境变量！")
+    print("请检查 GitHub Repository Secrets 是否配置正确（EML_1, PWD_1...）。")
     sys.exit(1)
 
 # 全局变量，用于动态保存网页上抓取到的应用名称
@@ -35,11 +35,9 @@ def send_tg_message(status_icon, status_text, time_left):
         print("未配置 TG_TOKEN 或 TG_ID，跳过 Telegram 推送。")
         return
 
-    # 获取北京时间 (UTC+8)
     local_time = time.gmtime(time.time() + 8 * 3600)
     current_time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
-    # 按照格式拼接消息，动态注入抓取到的应用名称
     text = (
         f"{DYNAMIC_APP_NAME}\n"
         f"{status_icon} {status_text}\n"
@@ -48,10 +46,7 @@ def send_tg_message(status_icon, status_text, time_left):
     )
 
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TG_CHAT_ID,
-        "text": text
-    }
+    payload = {"chat_id": TG_CHAT_ID, "text": text}
     
     try:
         r = requests.post(url, json=payload, timeout=10)
@@ -63,7 +58,7 @@ def send_tg_message(status_icon, status_text, time_left):
         print(f"  Telegram 通知发送异常: {e}")
 
 # ============================================================
-#  页面注入脚本
+#  页面注入脚本 (Turnstile 辅助)
 # ============================================================
 _EXPAND_JS = """
 (function() {
@@ -139,9 +134,6 @@ _WININFO_JS = """
 })()
 """
 
-# ============================================================
-#  底层输入工具
-# ============================================================
 def js_fill_input(sb, selector: str, text: str):
     safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
     sb.execute_script(f"""
@@ -184,9 +176,6 @@ def _xdotool_click(x: int, y: int):
     except Exception:
         os.system(f"xdotool mousemove {x} {y} click 1 2>/dev/null")
 
-# ============================================================
-#  人机验证处理
-# ============================================================
 def _click_turnstile(sb):
     try:
         coords = sb.execute_script(_COORDS_JS)
@@ -240,9 +229,6 @@ def handle_turnstile(sb) -> bool:
     print("  Turnstile 6 次均失败")
     return False
 
-# ============================================================
-#  账户登录模块
-# ============================================================
 def login(sb) -> bool:
     print(f"打开登录页面: {LOGIN_URL}")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
@@ -298,34 +284,37 @@ def login(sb) -> bool:
     sb.save_screenshot("login_failed.png")
     return False
 
-# ============================================================
-#  自动续期模块 (动态抓取名称 + TG 通知)
-# ============================================================
 def renew(sb) -> bool:
     global DYNAMIC_APP_NAME
-    
     print("\n" + "="*50)
     print("   开始自动续期流程")
     print("="*50)
     
     print("进入控制面板: https://justrunmy.app/panel")
     sb.open("https://justrunmy.app/panel")
-    time.sleep(3)
+    time.sleep(5)
 
     print("自动读取应用名称...")
-    try:
-        # 等待带有 font-semibold 的 h3 标签加载
-        sb.wait_for_element('h3.font-semibold', timeout=10)
-        # 从网页中抓取真实的名称并保存到全局变量
-        DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
-        print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
-        
-        # 直接点击刚才抓取到的元素
-        sb.click('h3.font-semibold')
-        time.sleep(3)
-        print(f"成功进入应用详情页: {sb.get_current_url()}")
-    except Exception as e:
-        print(f"找不到应用卡片: {e}")
+    retry_count = 3
+    found = False
+    for attempt in range(1, retry_count + 1):
+        try:
+            sb.wait_for_element('h3.font-semibold', timeout=15)
+            DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
+            print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
+            
+            sb.click('h3.font-semibold')
+            time.sleep(3)
+            print(f"成功进入应用详情页: {sb.get_current_url()}")
+            found = True
+            break
+        except Exception as e:
+            if attempt < retry_count:
+                print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
+                sb.refresh()
+                time.sleep(5)
+    
+    if not found:
         sb.save_screenshot("renew_app_not_found.png")
         send_tg_message("[X]", "续期失败(找不到应用)", "未知")
         return False
@@ -347,8 +336,6 @@ def renew(sb) -> bool:
             sb.save_screenshot("renew_turnstile_fail.png")
             send_tg_message("[X]", "续期失败(人机验证未过)", "未知")
             return False
-    else:
-        print("弹窗内未检测到 Turnstile")
 
     print("点击 Just Reset 确认续期...")
     try:
@@ -365,7 +352,6 @@ def renew(sb) -> bool:
     try:
         sb.refresh()
         time.sleep(4)
-        # 根据页面结构获取剩余时间文本
         timer_text = sb.get_text('span.font-mono.text-xl')
         print(f"当前应用剩余时间: {timer_text}")
         
@@ -375,7 +361,7 @@ def renew(sb) -> bool:
             send_tg_message("[OK]", "续期完成", timer_text)
             return True
         else:
-            print("倒计时似乎没有重置到最高值，请人工检查截图确认。")
+            print("倒计时似乎没有重置到最高值，请人工检查截图。")
             sb.save_screenshot("renew_warning.png")
             send_tg_message("[!]", "续期异常(请检查)", timer_text)
             return True 
@@ -385,25 +371,18 @@ def renew(sb) -> bool:
         send_tg_message("[!]", "读取剩余时间失败", "未知")
         return False
 
-# ============================================================
-#  脚本执行入口
-# ============================================================
 def main():
     print("=" * 50)
     print("   JustRunMy.app 自动登录与续期脚本")
     print("=" * 50)
     
-    # --- 代理自动检测: 有 PROXY_URL 就走 sing-box 本地代理 ---
-    proxy_url = os.environ.get("PROXY_URL", "").strip()
+    proxy_url_env = os.environ.get("PROXY_URL", "").strip()
     sb_kwargs = {"uc": True, "test": True, "headless": False}
     
-    if proxy_url:
-        # PROXY_URL 存在 → sing-box 已在 yml 中启动，本地 HTTP 代理固定为 127.0.0.1:8080
+    if proxy_url_env:
         local_proxy = "http://127.0.0.1:8080"
-        print(f"检测到 PROXY_URL，挂载本地代理: {local_proxy}")
+        print(f"检测到代理配置，挂载本地通道: {local_proxy}")
         sb_kwargs["proxy"] = local_proxy
-    else:
-        print("未设置 PROXY_URL，直连访问")
     
     with SB(**sb_kwargs) as sb:
         print("浏览器已启动")
